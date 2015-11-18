@@ -4,7 +4,8 @@
 # Author: Kendy 11/2015
 # Verze: 1.0
 #
-# Tento script stahne aktualni platbu z FIO, zparsuje ji a upne ji do databaze
+# -f stahnuti aktualni platby z FIO API bankovnictvi, zparsovat ji a upload do databaze
+# -s stazene csv z csas rozparsuje a uploadne do databaze
 
 import ConfigParser, os, sys, re
 from xml.dom import minidom
@@ -364,8 +365,6 @@ def StahniVypisFio(con, datumOd, datumDo, fio_url, fio_token, fio_cislo_uctu, sp
 		Info_Od_Banky = re.sub("'", "\\'", Info_Od_Banky)
 		ZpravaProPrijemce = re.sub("\"", "\\\"", ZpravaProPrijemce)
 		Info_Od_Banky = re.sub("\"", "\\\"", Info_Od_Banky)
-
-#		print "ZpravaProPrijemce[%s]" % ZpravaProPrijemce
 
 		# Ve vychozim stavu maji uplne vsechny platby flag 80000, nejake zname pripady muzeme rovnou upravit na jine
 		Flags = '80000'
