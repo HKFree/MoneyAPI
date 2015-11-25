@@ -108,7 +108,7 @@ def main(argv):
 		if (re.search(r'(?i)dnes', options.datum)):
 			mesicNyni =  "%02d" % int(date.today().month)
 			denNyni = "%02d" % int(date.today().day)
-			datumVypisu = ( "%s-%s-%s" ) % (rokNyni, mesicNyni, denNyni)
+			datumVypisu = ( "%s-%s-%s" ) % (date.today().year, mesicNyni, denNyni)
 		elif (re.search(r'(?i)vcera', options.datum)):
 			oneDayAgo = date.today()+relativedelta(days=-1)
 			oneDayAgoDay	= "%02d" % oneDayAgo.day	# vraci nam to format v jednociselnem tvaru, chceme dvoj
@@ -129,10 +129,68 @@ def main(argv):
 	# parametr -z
 	if (options.zpracujOpt):
 		PripisPlatbyNaUzivatelskeKonto(con, options.testOpt, options.verboseOpt)
-	sys.exit(0)
-	
+
 def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
-	sys.exit(0)
+	cur = con.cursor()
+
+	# Vsechny nove-nezpracovane prichozi platby
+	sql = "SELECT id, vs, datum, castka FROM PrichoziPlatba WHERE typ_platby = '1' AND castka > 0"
+
+	cur.execute(sql)
+	rows = cur.fetchall()
+	for row in rows:
+		flags = ""
+		idPlatby = row[0]
+		vsPlatby = row[1]
+		datumPlatby = row[2]
+		castkaPlatby = row[3]
+
+		poznamkaPlatby = 'Prichozi platba'
+		if ((vsPlatby is None ) or ( int(vsPlatby) == 0 )):			# uzivatel zapomel dat VS
+			vsPlatby = "Null"						# Nastavime ho tedy na Null
+			TypPohybuNaUctu_id = 10						# Neznama prichozi platba
+			poznamkaPlatby = 'Neznama platba, nema VS'
+			if spustitVerbose: print "Neznama prichozi platba [%s] - nema VS" % (vsPlatby)
+		else:
+			sql = "SELECT * FROM Uzivatel WHERE id = %s" % (vsPlatby)
+			cur.execute(sql)
+			num_rows=cur.rowcount
+			if (num_rows == 0):
+				if spustitVerbose: print "Nenalezen uzivatel. Platba VS:[%s] Datum:[%s] Castka:[%s]" % (vsPlatby, datumPlatby, castkaPlatby)
+				TypPohybuNaUctu_id = 10					# Neznama prichozi platba
+				poznamkaPlatby = 'Neznama platba, chybny VS:[%s]' % (vsPlatby)
+				vsPlatby = "Null"					# Uzivatel sice dal VS, ale neni v db, ForeignKey by nas nepustil, nastavuji Null
+			else:
+				TypPohybuNaUctu_id = 1					# Prichozi platba se znamym VS
+
+		# Vlozime platbu do UzivatelskeKonto
+		sql = """INSERT INTO UzivatelskeKonto (PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka) 
+VALUES (%s, %s, %s, %s, '%s', '%s')""" % (idPlatby, vsPlatby, TypPohybuNaUctu_id , castkaPlatby, datumPlatby, poznamkaPlatby)
+		try:
+			if spustitVerbose: print sql
+			if not spustitTest: 
+				cur.execute(sql)
+				con.commit()
+		except mdb.Error, e:
+			try:
+				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+			except IndexError:
+				print "MySQL Error: %s" % str(e)
+				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+
+		# A prichozi platbu dle ID zupdatujeme jako zpracovanou
+		sql = "UPDATE PrichoziPlatba SET typ_platby = 2 WHERE id = %s" % idPlatby
+		try:
+			if spustitVerbose: print sql
+			if not spustitTest: 
+				cur.execute(sql)
+				con.commit()
+		except mdb.Error, e:
+			try:
+				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+			except IndexError:
+				print "MySQL Error: %s" % str(e)
 
 def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spustitTest, spustitVerbose):
 
@@ -152,7 +210,7 @@ def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spust
 				# uz prisly na radu data ?
 				if (csvData == 1):
 					cur = con.cursor()
-					Flags = '80000'
+					Flags = '1'			# Nova platba
 					# VS, SS, Datum, CisloUctu, NazevUctu, Objem, 2010, IDPohybu, ZpravaProPrijemce, Flags, UInfo, Info_Od_Banky, Datum
 					Datum = row[0]			# 00 Due date
 					Info_Od_Banky = row[1]		# 01 Payment
@@ -197,10 +255,10 @@ def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spust
 					if (Objem < 0.0):
 						# Bankovni poplatek
 						if (re.search(r'(?i)poplatek', Info_Od_Banky)):
-							Flags = "00010"
+							Flags = "4"
 					else:
 						# Typ teto platby nezname
-						Flags = "90000"
+						Flags = "10"
 
 					# Mame vsechno, stvor SQL a posli do db
 					sql = """INSERT INTO PrichoziPlatba (vs, ss, datum, cislo_uctu, nazev_uctu, castka, kod_cilove_banky, index_platby, 
@@ -286,13 +344,13 @@ def StahniVypisFio(con, datumOd, datumDo, fio_url, fio_token, fio_cislo_uctu, sp
 		except Exception,e:
 			# tato hlaska pak prijde mailem od cronu
 			print "IDpohybu neni v polozkach, to je vsak povinna polozka, predpoklad je tedy, ze jsme stahli necely vypis. Preskakuji."
-			break
+			continue
 
 		try:	Datum    = t.getElementsByTagName('column_0')[0].childNodes[0].data	# Datum pohybu
 		except Exception,e:
 			# tato hlaska pak prijde mailem od cronu
 			print "Datum neni v polozkach, to je vsak povinna polozka, predpoklad je tedy, ze jsme stahli necely vypis. Preskakuji."
-			break
+			continue
 		# Datum nam predavaji ve formatu 2015-11-10+01:00, potrebujem vsak jen YYYY-MM-DD
 		Datum = Datum[:10]
 
@@ -300,13 +358,13 @@ def StahniVypisFio(con, datumOd, datumDo, fio_url, fio_token, fio_cislo_uctu, sp
 		except Exception,e:
 			# tato hlaska pak prijde mailem od cronu
 			print "Objem neni v polozkach, to je vsak povinna polozka, predpoklad je tedy, ze jsme stahli necely vypis. Preskakuji."
-			break
+			continue
 
 		try:	Mena = t.getElementsByTagName('column_14')[0].childNodes[0].data	# Mena prichozi platby
 		except Exception,e:
 			# tato hlaska pak prijde mailem od cronu
 			print "Mena neni v polozkach, to je vsak povinna polozka, predpoklad je tedy, ze jsme stahli necely vypis. Preskakuji."
-			break
+			continue
 
 		# Volitelne polozky
 		try:	Ucet     = t.getElementsByTagName('column_2')[0].childNodes[0].data	# Cislo protiuctu
@@ -366,28 +424,28 @@ def StahniVypisFio(con, datumOd, datumDo, fio_url, fio_token, fio_cislo_uctu, sp
 		ZpravaProPrijemce = re.sub("\"", "\\\"", ZpravaProPrijemce)
 		Info_Od_Banky = re.sub("\"", "\\\"", Info_Od_Banky)
 
-		# Ve vychozim stavu maji uplne vsechny platby flag 80000, nejake zname pripady muzeme rovnou upravit na jine
-		Flags = '80000'
+		# Ve vychozim stavu maji uplne vsechny platby flag 1, nejake zname pripady muzeme rovnou upravit na jine
+		Flags = '1'
 
 		# Jelikoz nepracujeme s kurzovnim listkem, tak automaticky oznacime jako neznamou platbu, ktera dosla v jine mene.
 		if not (re.search("CZK", Mena)):
-			Flags = '90001'
+			Flags = '13'
 			print "Dosla prichozi platba v jine mene"
 
 		if (float(Objem) < 0.0):
 			# Bankovni poplatek
 			if (re.search(r'(?i)poplatek', Typ)):
-				Flags = "00010"
+				Flags = "4"
 			# Vyber pokladnou
 			elif (re.search(r'poklad', Typ)):
-				Flags = "00100"
+				Flags = "11"
 				if (len(Info_Od_Banky)>0):
 					Info_Od_Banky = Info_Od_Banky + " " + Provedl
 				else:
 					Info_Od_Banky = Provedl
 			else:
 				# Typ teto platby nezname
-				Flags = "90000"
+				Flags = "10"
 
 		sql = """INSERT INTO PrichoziPlatba (vs, ss, datum, cislo_uctu, nazev_uctu, castka, kod_cilove_banky, index_platby, 
 zprava_prijemci, typ_platby, identifikace_uzivatele, info_od_banky) 
