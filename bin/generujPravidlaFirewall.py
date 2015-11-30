@@ -112,7 +112,8 @@ def generujIPsety(con, firewall_dir, testOpt, verboseOpt, nazevScriptu):
 
 	# Otevrit soubor pro zapis IPSetu
 	try:
-		f10107 = open(file10107,'w')
+		if testOpt = False:
+			f10107 = open(file10107,'w')
 		if verboseOpt == True:
 			print "Oteviram soubor [%s] pro zapis" % file10107
 	except IOError:
@@ -121,7 +122,8 @@ def generujIPsety(con, firewall_dir, testOpt, verboseOpt, nazevScriptu):
 
 	# Otevrit soubor pro zapis IPSetu
 	try:
-		f89248 = open(file89248,'w')
+		if testOpt = False:
+			f89248 = open(file89248,'w')
 		if verboseOpt == True:
 			print "Oteviram soubor [%s] pro zapis" % file89248
 	except IOError:
@@ -137,24 +139,28 @@ def generujIPsety(con, firewall_dir, testOpt, verboseOpt, nazevScriptu):
 	datetimeTed = ( "%s-%s-%s %s:%s:%s" ) % (datetime.today().year, mesicNyni, denNyni, hodinaNyni, minutaNyni, sekundaNyni)
 
 	# Zapis hlavicky do souboru
-	f10107.write('# Generovano z money HKfree v %s (%s)\n' % (datetimeTed, nazevScriptu) )
-	f89248.write('# Generovano z money HKfree v %s (%s)\n' % (datetimeTed, nazevScriptu) )
-	f10107.write('create temporaryIPSET10107-HKfree bitmap:ip range 10.107.0.0-10.107.255.255\n')
-	f89248.write('create temporaryIPSET89248-HKfree bitmap:ip range 89.248.240.0-89.248.255.255\n')
+	if testOpt = False:
+		f10107.write('# Generovano z money HKfree v %s (%s)\n' % (datetimeTed, nazevScriptu) )
+		f89248.write('# Generovano z money HKfree v %s (%s)\n' % (datetimeTed, nazevScriptu) )
+		f10107.write('create temporaryIPSET10107-HKfree bitmap:ip range 10.107.0.0-10.107.255.255\n')
+		f89248.write('create temporaryIPSET89248-HKfree bitmap:ip range 89.248.240.0-89.248.255.255\n')
 
 	# Projit vysledky z databaze a zapsat do souboru ipsety
 	for row in rows:
 		ipAdresa = row[0]
 		if re.search("10.107", ipAdresa):
-			f10107.write('add temporaryIPSET10107-HKfree %s\n' % (ipAdresa))
+			if testOpt = False:
+				f10107.write('add temporaryIPSET10107-HKfree %s\n' % (ipAdresa))
 		elif re.search("89.248", ipAdresa):
-			f89248.write('add temporaryIPSET89248-HKfree %s\n' % (ipAdresa))
+			if testOpt = False:
+				f89248.write('add temporaryIPSET89248-HKfree %s\n' % (ipAdresa))
 		else:
 			print "Nevalidni ip Adresa [%s]" % (ipAdresa)
 
 	# uzavrit soubory
-	f10107.close()
-	f89248.close()
+	if testOpt = False:
+		f10107.close()
+		f89248.close()
 
 if __name__ == "__main__":
 	main(sys.argv[1:])
