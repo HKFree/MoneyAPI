@@ -164,7 +164,7 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 				TypPohybuNaUctu_id = 1					# Prichozi platba se znamym VS
 
 		# Kontrola na SloucenyUzivatel
-		if (isinstance(int(vsPlatby), (int))):
+		if not (vsPlatby == "Null"):
 			sql = "SELECT Uzivatel_id FROM SloucenyUzivatel WHERE slouceny_uzivatel = %s" % (vsPlatby)
 			try:
 				if spustitVerbose: print sql
@@ -174,6 +174,7 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 					rows = cur.fetchall()
 					if spustitVerbose: print "vsPlatby pred sloucenim: [%s]" % vsPlatby
 					for row in rows:
+						poznamkaPlatby = "Prichozi platba na sloucene ID:[%s]" % vsPlatby
 						vsPlatby = row[0]
 						if spustitVerbose: print "vsPlatby po kontrole na slouceni: [%s]" % vsPlatby
 			except mdb.Error, e:
