@@ -163,6 +163,27 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 			else:
 				TypPohybuNaUctu_id = 1					# Prichozi platba se znamym VS
 
+		# Kontrola na SloucenyUzivatel
+		if (isinstance(int(vsPlatby), (int))):
+			sql = "SELECT Uzivatel_id FROM SloucenyUzivatel WHERE slouceny_uzivatel = %s" % (vsPlatby)
+			try:
+				if spustitVerbose: print sql
+				if not spustitTest: 
+					cur.execute(sql)
+					con.commit()
+					rows = cur.fetchall()
+					if spustitVerbose: print "vsPlatby pred sloucenim: [%s]" % vsPlatby
+					for row in rows:
+						vsPlatby = row[0]
+						if spustitVerbose: print "vsPlatby po kontrole na slouceni: [%s]" % vsPlatby
+			except mdb.Error, e:
+				try:
+					print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+					continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+				except IndexError:
+					print "MySQL Error: %s" % str(e)
+					continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+
 		# Vlozime platbu do UzivatelskeKonto
 		sql = """INSERT INTO UzivatelskeKonto (PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka) 
 VALUES (%s, %s, %s, %s, '%s', '%s')""" % (idPlatby, vsPlatby, TypPohybuNaUctu_id , castkaPlatby, datumPlatby, poznamkaPlatby)
