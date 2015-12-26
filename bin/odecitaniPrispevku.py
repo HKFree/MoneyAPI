@@ -270,19 +270,6 @@ ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
 (null, %s, 4, 0, %s, "[Automat] Prodlouzeni CC", 1""" % (userId, datetimeTed)
 
 		try:
-			if spustitVerbose: print sql
-			if not spustitTest:
-				cur.execute(sql)
-				con.commit()
-		except mdb.Error, e:
-			try:
-				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
-			except IndexError:
-				print "MySQL Error: %s" % str(e)
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
-
-		try:
 			if spustitVerbose: print sql2
 			if not spustitTest:
 				cur.execute(sql2)
@@ -290,10 +277,19 @@ ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
 		except mdb.Error, e:
 			try:
 				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
 			except IndexError:
 				print "MySQL Error: %s" % str(e)
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+
+		try:
+			if spustitVerbose: print sql
+			if not spustitTest:
+				cur.execute(sql)
+				con.commit()
+		except mdb.Error, e:
+			try:
+				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+			except IndexError:
+				print "MySQL Error: %s" % str(e)
 
 if __name__ == "__main__":
 	main(sys.argv[1:])
