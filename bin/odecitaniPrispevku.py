@@ -93,10 +93,10 @@ def main(argv):
 
 	# parametr -p
 	if (options.prvnihoOpt):
-		if (denNyni == 1):
-			OdectiPlatbyPrvniho(con, vysePrispevku, options.testOpt, options.verboseOpt, datetimeTed)
-		else:
-			print "Dnes neni prvniho, neodecitam"
+#		if (denNyni == 1):
+		OdectiPlatbyPrvniho(con, vysePrispevku, options.testOpt, options.verboseOpt, datetimeTed)
+#		else:
+#			print "Dnes neni prvniho, neodecitam"
 
 	# parametr -a
 	if (options.automatOpt):
@@ -270,17 +270,6 @@ ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
 (null, %s, 4, 0, %s, "[Automat] Prodlouzeni CC", 1""" % (userId, datetimeTed)
 
 		try:
-			if spustitVerbose: print sql2
-			if not spustitTest:
-				cur.execute(sql2)
-				con.commit()
-		except mdb.Error, e:
-			try:
-				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-			except IndexError:
-				print "MySQL Error: %s" % str(e)
-
-		try:
 			if spustitVerbose: print sql
 			if not spustitTest:
 				cur.execute(sql)
@@ -288,8 +277,23 @@ ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
 		except mdb.Error, e:
 			try:
 				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
 			except IndexError:
 				print "MySQL Error: %s" % str(e)
+				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+
+		try:
+			if spustitVerbose: print sql2
+			if not spustitTest:
+				cur.execute(sql2)
+				con.commit()
+		except mdb.Error, e:
+			try:
+				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+			except IndexError:
+				print "MySQL Error: %s" % str(e)
+				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
 
 if __name__ == "__main__":
 	main(sys.argv[1:])

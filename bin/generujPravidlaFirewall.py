@@ -11,6 +11,8 @@ import ConfigParser, os, sys, re
 import MySQLdb as mdb
 from datetime import datetime
 from optparse import OptionParser
+from random import randint
+
 
 VERSION = '1.0.0'
 
@@ -18,6 +20,11 @@ VERSION = '1.0.0'
 workdir = os.path.dirname(os.path.realpath(__file__))
 config_file = workdir + '/../etc/money.ini'
 firewall_dir = workdir + '/../firewall-pravidla'
+
+# spolecne funkce pro money
+sys.path.insert(0, workdir + '/../lib')
+from moneyLib import *
+
 # Nacist ini
 if os.path.exists(config_file):
 	try:
@@ -77,6 +84,11 @@ def main(argv):
 		dest='smtpOpt',
 		default=False,
 		help='Vygeneruje aktualni pravidla pro povolene SMTP servery')
+	parser.add_option('-n', '--snat',
+		action='store_true',
+		dest='snatOpt',
+		default=False,
+		help='Vygeneruje pravidla SNAT')
 	parser.add_option('-v', '--verbose',
 		action='store_true',
 		dest='verboseOpt',
@@ -101,30 +113,128 @@ def main(argv):
 	if (options.smtpOpt):
 		generujSMTPomezeni(con, firewall_dir, options.testOpt, options.verboseOpt, nazevScriptu, datetimeTed)
 
+	if (options.snatOpt):
+		generujSNATy(con, firewall_dir, options.testOpt, options.verboseOpt, nazevScriptu, datetimeTed)
+
+def generujSNATy (con, firewall_dir, testOpt, verboseOpt, nazevScriptu, datetimeTed):
+	# Nazev NAT souboru
+	fileNAT = firewall_dir + '/NAT'
+	fileNATSTATIC = firewall_dir + '/static/NAT-STATIC'
+
+	# datetimeTed = ( "%s-%s-%s %s:%s:%s" )
+	sql = "SELECT num FROM SNat WHERE date LIKE '%s-01%%' " % ( datetimeTed[:7] )
+	rows, numRows = spustSql(con, sql, testOpt, verboseOpt)
+
+	# neni zaznam pro tento mesic, musime vygenerovat novy
+	if ( numRows == 0 ):
+		# nejprve zjistime posledni pouzity
+		sql = "SELECT num FROM SNat ORDER by date desc"
+		rows, numRows = spustSql(con, sql, testOpt, verboseOpt)
+		snatStartNum = randint(1,224)
+
+		if (numRows == 1):
+			while ( (snatStartNum == 0) or (snatStartNum == rows[0][0]) ):
+				print "Cislo [%s] se shoduje jiz se starymi cisly" % snatStartNum
+				snatStartNum = randint(1,224)
+		elif (numRows == 2):
+			while ( (snatStartNum == 0) or (snatStartNum == rows[0][0]) or (snatStartNum == rows[1][0]) ):
+				print "Cislo [%s] se shoduje jiz se starymi cisly" % snatStartNum
+				snatStartNum = randint(1,224)
+		elif (numRows == 3):
+			while ( (snatStartNum == 0) or (snatStartNum == rows[0][0]) or (snatStartNum == rows[1][0]) or (snatStartNum == rows[2][0]) ):
+				print "Cislo [%s] se shoduje jiz se starymi cisly" % snatStartNum
+				snatStartNum = randint(1,224)
+
+		sql = "INSERT INTO SNat (num, date) VALUES (%s, '%s-01')" % (snatStartNum, datetimeTed[:7])
+		spustSql(con, sql, testOpt, verboseOpt)
+	else:
+		# zaznam existuje, pouzijeme cislo a generujeme SNAT
+		snatStartNum = rows[0][0]
+		sql = "SELECT DATE_SUB(NOW(), INTERVAL 3 MONTH)"
+		rows, numRows = spustSql(con, sql, testOpt, verboseOpt)
+		datumOffset = str(rows[0][0])
+		sql = "DELETE FROM SNat WHERE date < '%s-02'" % ( datumOffset[:7] )
+		spustSql(con, sql, testOpt, verboseOpt)
+
+	# Otevrit staticky soubor NATu pro cteni
+	try:
+		if testOpt == False:
+			fNATSTATIC = open(fileNATSTATIC,'r')
+	except IOError:
+		print "Nemohu otevrit %s pro zapis" % (fileNATSTATIC)
+		sys.exit(1)
+
+	# Otevrit soubor pro zapis NATu
+	try:
+		if testOpt == False:
+			fNAT = open(fileNAT,'w')
+		if verboseOpt == True:
+			print "Oteviram soubor [%s] pro zapis" % fileNAT
+	except IOError:
+		print "Nemohu otevrit %s pro zapis" % (fileNAT)
+		sys.exit(1)
+
+	fNAT.write('# Generovano z money HKfree v %s (%s)\n' % (datetimeTed, nazevScriptu) )
+	staticPravidla = fNATSTATIC.read()
+	fNAT.write(staticPravidla)
+
+	###########################################################################################
+	# SNAT
+	hkfSUB = 0			# hkfree subnet, 10.107.XXX.0/24
+	hkfVIP = snatStartNum		# posledni cislo pro verejne IP
+	sub = 0; cyklus = 0
+	while ( cyklus <= 31):
+		# Vzdy 8 oblasti je NATovano za jednu Verejku, celkem tedy 32 verejnych IP pouzito na NATy v danem mesici
+		while (sub <= 7):
+			sub += 1	# pocitame jen 0 az 7 , tj aby bylo vzdy 8 oblasti pod jednou hkfVIP
+			fNAT.write("-A OBLASTI -s 10.107.%s.0/255.255.255.0 -o %s -j SNAT --to-source 89.248.248.%s\n" % (hkfSUB, "vlan4001", hkfVIP) )
+			fNAT.write("-A OBLASTI -s 10.207.%s.0/255.255.255.0 -o %s -j SNAT --to-source 89.248.249.%s\n" % (hkfSUB, "vlan4001", hkfVIP) )
+			fNAT.write("-A OBLASTI -s 10.107.%s.0/255.255.255.0 -o %s -j SNAT --to-source 89.248.248.%s\n" % (hkfSUB, "eth4", hkfVIP) )
+			fNAT.write("-A OBLASTI -s 10.207.%s.0/255.255.255.0 -o %s -j SNAT --to-source 89.248.249.%s\n" % (hkfSUB, "eth4", hkfVIP) )
+			hkfSUB += 1
+		hkfVIP += 1
+		cyklus += 1
+		sub = 0
+
+	###########################################################################################
+	# DNAT porty
+	sql = "SELECT ip, sport, dport, info FROM DNat"
+	rows, numRows = spustSql(con, sql, testOpt, verboseOpt)
+
+	if ( numRows > 0):
+		# Projit vysledky z databaze a zapsat do souboru ipsety
+		for row in rows:
+			(ipAdresa, sport, dport, info) = row
+
+			m107 = re.match(r"10.107.(?P<area>\d+).\d+", ipAdresa)
+			m207 = re.match(r"10.207.(?P<area>\d+).\d+", ipAdresa)
+			if not (m107 is None):
+				hkfVIP = "89.248.248.%s" % ( (int(m107.group('area')) / 8) + snatStartNum )
+			if not (m207 is None):
+				hkfVIP = "89.248.249.%s" % ( (int(m207.group('area')) / 8) + snatStartNum )
+
+			fNAT.write("-A DNAT_PORTY -d %s -i %s -p udp -m udp --dport %s -j DNAT --to-destination %s:%s\n" % (hkfVIP, "vlan4001", sport, ipAdresa, dport) )
+			fNAT.write("-A DNAT_PORTY -d %s -i %s -p tcp -m tcp --dport %s -j DNAT --to-destination %s:%s\n" % (hkfVIP, "vlan4001", sport, ipAdresa, dport) )
+
+			fNAT.write("-A DNAT_PORTY -d %s -i %s -p udp -m udp --dport %s -j DNAT --to-destination %s:%s\n" % (hkfVIP, "eth4", sport, ipAdresa, dport) )
+			fNAT.write("-A DNAT_PORTY -d %s -i %s -p tcp -m tcp --dport %s -j DNAT --to-destination %s:%s\n" % (hkfVIP, "eth4", sport, ipAdresa, dport) )
+
+	# fNAT.write("COMMIT\n")	# commit je ve skriptu REDSYS"
+
+	# uzavrit soubory
+	if testOpt == False:
+		fNAT.close()
 
 
-def generujIPsety(con, firewall_dir, testOpt, verboseOpt, nazevScriptu, datetimeTed):
 
+def generujIPsety (con, firewall_dir, testOpt, verboseOpt, nazevScriptu, datetimeTed):
 	# Nazvy souboru ipsetu
 	file10107 = firewall_dir + '/ipset10107.cfg'
 	file89248 = firewall_dir + '/ipset89248.cfg'
-	# kurzor na databazi
-	cur = con.cursor()
 
 	# Z db chceme vsechny IPcka co jsou povoleny do netu a useri jsou aktivni
 	sql = "select IPAdresa.ip_adresa FROM IPAdresa, Uzivatel WHERE IPAdresa.internet = 1 AND IPAdresa.Uzivatel_id = Uzivatel.id AND Uzivatel.money_aktivni = 1"
-	try:
-		if verboseOpt == True:
-			print "Poustim sql dotaz [%s] nad databazi pro ziskani seznamu IP" % sql
-			print
-		if testOpt == False:
-			cur.execute(sql)
-			rows = cur.fetchall()
-	except mdb.Error, e:
-		try:
-			print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-		except IndexError:
-			print "MySQL Error: %s" % str(e)
+	rows, numRows = spustSql(con, sql, testOpt, verboseOpt)
 
 	# Otevrit soubor pro zapis IPSetu
 	try:
@@ -235,7 +345,6 @@ def generujSMTPomezeni (con, firewall_dir, testOpt, verboseOpt, nazevScriptu, da
 			fSMTP.write('-A SMTP -s %s -j ACCEPT\n' % ipAdresa)
 		if ((typ == 2) or (typ == 3)):
 			fSMTP.write('-A SMTP -d %s -j ACCEPT\n' % ipAdresa)
-
 
 	fSMTP.write('\n# Freemaily jejich SMTP\n\n')
 	for ipAdresa in freeSmtpServery:

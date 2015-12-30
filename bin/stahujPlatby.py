@@ -186,8 +186,8 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 					continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
 
 		# Vlozime platbu do UzivatelskeKonto
-		sql = """INSERT INTO UzivatelskeKonto (PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka) 
-VALUES (%s, %s, %s, %s, '%s', '%s')""" % (idPlatby, vsPlatby, TypPohybuNaUctu_id , castkaPlatby, datumPlatby, poznamkaPlatby)
+		sql = """INSERT INTO UzivatelskeKonto (PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) 
+VALUES (%s, %s, %s, %s, '%s', '%s')""" % (idPlatby, vsPlatby, TypPohybuNaUctu_id , castkaPlatby, datumPlatby, poznamkaPlatby, 1)
 		try:
 			if spustitVerbose: print sql
 			if not spustitTest: 
