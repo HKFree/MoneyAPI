@@ -233,7 +233,15 @@ def generujIPsety (con, firewall_dir, testOpt, verboseOpt, nazevScriptu, datetim
 	file89248 = firewall_dir + '/ipset89248.cfg'
 
 	# Z db chceme vsechny IPcka co jsou povoleny do netu a useri jsou aktivni
-	sql = "select IPAdresa.ip_adresa FROM IPAdresa, Uzivatel WHERE IPAdresa.internet = 1 AND IPAdresa.Uzivatel_id = Uzivatel.id AND Uzivatel.money_aktivni = 1"
+	sql = """SELECT IPAdresa.ip_adresa FROM IPAdresa, Uzivatel WHERE
+	( IPAdresa.internet =1 AND IPAdresa.Uzivatel_id = Uzivatel.id AND Uzivatel.money_aktivni =1 ) OR
+	( IPAdresa.internet =1 AND IPAdresa.Uzivatel_id IS NULL )
+	GROUP BY IPAdresa.ip_adresa
+	UNION
+	SELECT IPAdresa.ip_adresa FROM IPAdresa, cc WHERE 
+	IPAdresa.internet =1 AND IPAdresa.Uzivatel_id = cc.id
+	GROUP BY IPAdresa.ip_adresa"""
+
 	rows, numRows = spustSql(con, sql, testOpt, verboseOpt)
 
 	# Otevrit soubor pro zapis IPSetu
