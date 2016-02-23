@@ -15,6 +15,9 @@ def spustSql (con, sql, testOpt, verboseOpt):
 			con.commit()
 			rows = cur.fetchall()
 			numRows = cur.rowcount
+		else:
+			numRows = -1
+			rows = []
 	except mdb.Error, e:
 		try:
 			print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
