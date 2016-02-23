@@ -134,7 +134,7 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 	cur = con.cursor()
 
 	# Vsechny nove-nezpracovane prichozi platby
-	sql = "SELECT id, vs, datum, castka FROM PrichoziPlatba WHERE typ_platby = '1' AND castka > 0"
+	sql = "SELECT id, vs, datum, castka FROM PrichoziPlatba WHERE TypPrichoziPlatby_id = '1' AND castka > 0"
 
 	cur.execute(sql)
 	rows = cur.fetchall()
@@ -148,7 +148,7 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 		poznamkaPlatby = 'Prichozi platba'
 		if ((vsPlatby is None ) or ( int(vsPlatby) == 0 )):			# uzivatel zapomel dat VS
 			vsPlatby = "Null"						# Nastavime ho tedy na Null
-			TypPohybuNaUctu_id = 10						# Neznama prichozi platba
+			TypPohybuNaUctu_id = 14						# Neznama prichozi platba
 			poznamkaPlatby = 'Neznama platba, nema VS'
 			if spustitVerbose: print "Neznama prichozi platba [%s] - nema VS" % (vsPlatby)
 		else:
@@ -157,7 +157,7 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 			num_rows=cur.rowcount
 			if (num_rows == 0):
 				if spustitVerbose: print "Nenalezen uzivatel. Platba VS:[%s] Datum:[%s] Castka:[%s]" % (vsPlatby, datumPlatby, castkaPlatby)
-				TypPohybuNaUctu_id = 10					# Neznama prichozi platba
+				TypPohybuNaUctu_id = 14					# Neznama prichozi platba
 				poznamkaPlatby = 'Neznama platba, chybny VS:[%s]' % (vsPlatby)
 				vsPlatby = "Null"					# Uzivatel sice dal VS, ale neni v db, ForeignKey by nas nepustil, nastavuji Null
 			else:
@@ -187,7 +187,7 @@ def PripisPlatbyNaUzivatelskeKonto(con, spustitTest, spustitVerbose):
 
 		# Vlozime platbu do UzivatelskeKonto
 		sql = """INSERT INTO UzivatelskeKonto (PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) 
-VALUES (%s, %s, %s, %s, '%s', '%s')""" % (idPlatby, vsPlatby, TypPohybuNaUctu_id , castkaPlatby, datumPlatby, poznamkaPlatby, 1)
+VALUES (%s, %s, %s, %s, '%s', '%s', '%s')""" % (idPlatby, vsPlatby, TypPohybuNaUctu_id , castkaPlatby, datumPlatby, poznamkaPlatby, 1)
 		try:
 			if spustitVerbose: print sql
 			if not spustitTest: 
@@ -202,7 +202,7 @@ VALUES (%s, %s, %s, %s, '%s', '%s')""" % (idPlatby, vsPlatby, TypPohybuNaUctu_id
 				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
 
 		# A prichozi platbu dle ID zupdatujeme jako zpracovanou
-		sql = "UPDATE PrichoziPlatba SET typ_platby = 2 WHERE id = %s" % idPlatby
+		sql = "UPDATE PrichoziPlatba SET TypPrichoziPlatby_id = 2 WHERE id = %s" % idPlatby
 		try:
 			if spustitVerbose: print sql
 			if not spustitTest: 
@@ -224,6 +224,7 @@ def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spust
 	for file in files:
 		f = csas_dirvypisynove + '/' +file
 		with open(f, 'rb') as csvfile:
+			print "UploadVypisCsasDoDb: zpracovavam soubor: [%s]" % (file)
 			# rozparsuj csvsoubor
 			sr=csv.reader(csvfile, delimiter=';')
 			# chceme zpracovat jen data, hlavicka nas nezajima
@@ -232,23 +233,26 @@ def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spust
 				# uz prisly na radu data ?
 				if (csvData == 1):
 					cur = con.cursor()
-					Flags = '1'			# Nova platba
+					Flags = '1'					# Nova platba
 					# VS, SS, Datum, CisloUctu, NazevUctu, Objem, 2010, IDPohybu, ZpravaProPrijemce, Flags, UInfo, Info_Od_Banky, Datum
-					Datum = row[0]			# 00 Due date
+					Datum = row[0]				# 00 Due date
 					Info_Od_Banky = row[1]		# 01 Payment
-					CisloUctu = row[2]		# 02 Counter-acc. no.
-					Objem = row[3]			# 03 Transaction
-					Mena = row[4]			# 04 + 14 Currency
+					CisloUctu = row[2]			# 02 Counter-acc. no.
+					Objem = row[3]				# 03 Transaction
+					Mena = row[4]				# 04 + 14 Currency
 					ZpravaProPrijemce = row[6]	# 06 Info on Payment
-					NazevUctu = row[7]		# 07 Counter-acc. name
-					VS = row[8]			# 08 Var.symb.1
-					IDPohybu = row[9]		# 09 Bank record
-					SS = row[11]			# 11 Specific symbol
+					NazevUctu = row[7]			# 07 Counter-acc. name
+					VS = row[8]					# 08 Var.symb.1
+					IDPohybu = row[9]			# 09 Bank record
+					SS = row[11]				# 11 Specific symbol
 					Datum = re.sub("/", "-", Datum)
-					UInfo = ""			# CSAS neposkytuje
-					
+					UInfo = ""					# CSAS neposkytuje
+
+					# CSAS nam obcas neposkytuje -SUMA, ale treba i - SUMA, tj mezera mezi minusem a sumou.
+					Objem = re.sub(" ", "", Objem)
 					# U objemu je desetinna tecka jako carka. Potrebujem tecku abychom to pak mohli prevest na float cislo
 					Objem = re.sub(",", ".", Objem); Objem = float(Objem)
+
 					# Konverze z CP1250 na UTF-8, pac CSAS v dnesni dobe funguje na CP1250 misto standardu UTF-8. V db vsak mame UTF-8
 					ZpravaProPrijemce = ZpravaProPrijemce.decode("cp1250"); ZpravaProPrijemce = ZpravaProPrijemce.encode("utf-8")
 					NazevUctu = NazevUctu.decode("cp1250"); NazevUctu = NazevUctu.encode("utf-8")
@@ -259,7 +263,6 @@ def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spust
 					if (IDPohybu.isdigit()):		# Jedna se o cislo ?
 						if (int(IDPohybu) == 0):
 							sql = "SELECT MAX(index_platby) FROM PrichoziPlatba WHERE kod_cilove_banky = 0800 AND index_platby like '99900%'"
-#							print sql
 							try:
 								cur.execute(sql)
 							except mdb.Error, e:
@@ -279,12 +282,17 @@ def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spust
 						if (re.search(r'(?i)poplatek', Info_Od_Banky)):
 							Flags = "4"
 					else:
-						# Typ teto platby nezname
-						Flags = "10"
+						# Uroky co mame pripsane na ucet
+						if (re.search(r'Úrok kredit', Info_Od_Banky)):
+							Flags = "9"
+
+					# Mena neni to v CZK
+					if not (re.search(r'CZK', Mena)):
+							Flags = "8"
 
 					# Mame vsechno, stvor SQL a posli do db
 					sql = """INSERT INTO PrichoziPlatba (vs, ss, datum, cislo_uctu, nazev_uctu, castka, kod_cilove_banky, index_platby, 
-qzprava_prijemci, typ_platby, identifikace_uzivatele, info_od_banky) 
+zprava_prijemci, TypPrichoziPlatby_id, identifikace_uzivatele, info_od_banky) 
 VALUES( %s, %s, '%s', '%s','%s', '%s', '%s', '%s','%s', '%s', '%s', '%s')
 ON DUPLICATE KEY UPDATE datum = '%s'""" % (VS, SS, Datum, CisloUctu, NazevUctu, Objem, 800, IDPohybu, ZpravaProPrijemce, Flags, UInfo, Info_Od_Banky, Datum )
 
@@ -451,7 +459,7 @@ def StahniVypisFio(con, datumOd, datumDo, fio_url, fio_token, fio_cislo_uctu, sp
 
 		# Jelikoz nepracujeme s kurzovnim listkem, tak automaticky oznacime jako neznamou platbu, ktera dosla v jine mene.
 		if not (re.search("CZK", Mena)):
-			Flags = '13'
+			Flags = '8'
 			print "Dosla prichozi platba v jine mene"
 
 		if (float(Objem) < 0.0):
@@ -460,17 +468,21 @@ def StahniVypisFio(con, datumOd, datumDo, fio_url, fio_token, fio_cislo_uctu, sp
 				Flags = "4"
 			# Vyber pokladnou
 			elif (re.search(r'poklad', Typ)):
-				Flags = "11"
+				Flags = "7"
 				if (len(Info_Od_Banky)>0):
 					Info_Od_Banky = Info_Od_Banky + " " + Provedl
 				else:
 					Info_Od_Banky = Provedl
 			else:
-				# Typ teto platby nezname
+				# Typ teto platby nezname, nastavuji odchozi platba
+				Flags = "3"
+
+		# prichozi platba od CEZu -> preplatek na elektrice
+		if ( CisloUctu  == '7770227/0100' ):
 				Flags = "10"
 
 		sql = """INSERT INTO PrichoziPlatba (vs, ss, datum, cislo_uctu, nazev_uctu, castka, kod_cilove_banky, index_platby, 
-zprava_prijemci, typ_platby, identifikace_uzivatele, info_od_banky) 
+zprava_prijemci, TypPrichoziPlatby_id, identifikace_uzivatele, info_od_banky) 
 VALUES( %s, %s, '%s', '%s','%s', '%s', '%s', '%s','%s', '%s', '%s', '%s')
 ON DUPLICATE KEY UPDATE datum = '%s'""" % (VS, SS, Datum, CisloUctu, NazevUctu, Objem, 2010, IDPohybu, ZpravaProPrijemce, Flags, UInfo, Info_Od_Banky, Datum )
 
