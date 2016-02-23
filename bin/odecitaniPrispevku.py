@@ -11,12 +11,17 @@ import ConfigParser, os, sys, re
 import MySQLdb as mdb
 from datetime import datetime
 from optparse import OptionParser
+import syslog
 
 VERSION = '1.0.0'
 
 # Aktualni pracovni adresar scriptu, s nim si automaticky nactem konfigurak
 workdir = os.path.dirname(os.path.realpath(__file__))
 config_file = workdir + '/../etc/money.ini'
+
+# spolecne funkce pro money
+sys.path.insert(0, workdir + '/../lib')
+from moneyLib import *
 
 # Nacist ini
 if os.path.exists(config_file):
@@ -87,49 +92,56 @@ def main(argv):
 
 	(options, args) = parser.parse_args()
 
+	# Otevrit syslog a nastavit nazev na nazev scriptu
+	syslog.openlog(nazevScriptu)
+
 	# uzivatel nezadal ani jeden parametr, len(sys.argv) = 1 a v nem je jen nazev scriptu
 	if len(sys.argv) == 1:
 		parser.parse_args(['--help'])
 
 	# parametr -p
 	if (options.prvnihoOpt):
-#		if (denNyni == 1):
-		OdectiPlatbyPrvniho(con, vysePrispevku, options.testOpt, options.verboseOpt, datetimeTed)
-#		else:
-#			print "Dnes neni prvniho, neodecitam"
+		if (int(denNyni) == 1):
+			OdectiPlatbyPrvniho(con, vysePrispevku, options.testOpt, options.verboseOpt, datetimeTed)
+		else:
+			print "Dnes [%s] neni prvniho, neodecitam" % (datetimeTed)
 
 	# parametr -a
 	if (options.automatOpt):
 		OdecitatPlatbyAutomaticky(con, vysePrispevku, options.testOpt, options.verboseOpt, datetimeTed)
 
-def OdectiPlatbyPrvniho(con, vysePrispevku, spustitTest, spustitVerbose, datetimeTed):
+def OdectiPlatbyPrvniho(con, vysePrispevku, testOpt, verboseOpt, datetimeTed):
 
-	# kurzor na databazi
-	cur = con.cursor()
+	# V databazi je format date, mysql nam pise warningy, coz nechcem, takze pokud se zmeni format, smazat tuto radku
+	datetimeTed = datetimeTed[0:10]
 
 	sql = "SELECT id FROM cc"
 	cc = dict()
-	cur.execute(sql)
-	rows = cur.fetchall()
+	rows, numRows = spustSql(con, sql, False, verboseOpt)
+
 	for row in rows:
 		userId = row[0]
 		cc[userId] = 1
 		# nyni mame v dict cc seznam vsech co maji mit net zdarma
 
-	sql = """SELECT Uzivatel_id, SUM( castka ), money_deaktivace, money_aktivni, TypClenstvi_id
-FROM UzivatelskeKonto
-JOIN Uzivatel ON Uzivatel.id = UzivatelskeKonto.Uzivatel_id
-GROUP BY Uzivatel_id
-ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
+	# Vsechny ucty z databaze, vyjma userId == 1, to je specialni uzivatel, toho nebudem procesovat
+	sql = """SELECT Uzivatel.id, SUM( castka ), money_deaktivace, money_aktivni, TypClenstvi_id
+FROM Uzivatel
+LEFT OUTER JOIN UzivatelskeKonto ON Uzivatel.id = UzivatelskeKonto.Uzivatel_id
+WHERE Uzivatel.id > 1
+GROUP BY Uzivatel.id
+ORDER BY `Uzivatel`.`id` ASC"""
+	rows, numRows = spustSql(con, sql, False, verboseOpt)
+	del sql
 
-	cur.execute(sql)
-	rows = cur.fetchall()
 	for row in rows:
-		userId = row[0]
+		sql = ""; sql2 = ""
+		# db nam vraci vse ve stringu, potrebujeme int
+		userId = int(row[0])
 		stavKonta = int(row[1])
-		stavDeaktivace = row[2]
-		stavAktivni = row[3]
-		typClenstvi = row[4]
+		stavDeaktivace = int(row[2])
+		stavAktivni = int(row[3])
+		typClenstvi = int(row[4])
 
 		# Ma uzivatel CC ?
 		if cc.has_key(userId):
@@ -137,111 +149,108 @@ ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
 		else:
 			maUserCC = False
 
-		# Kdyz neni radny clen a je neaktivni, tak nas nezajima
-		if ((  typClenstvi <= 2 ) and ( stavAktivni == 0)):
-			pass
+		# Neni to radny clen
+		if ( typClenstvi <= 2 ):
+			# Je neaktivni, tak nas nezajima a jdem na dalsiho usera
+			if (stavAktivni == 0):
+				continue
+			else:
+				# Kdyz to neni radny clen, ale je aktivni, tak ho deaktivujeme, ten nema do netu co delat
+				sql = "UPDATE Uzivatel SET money_aktivni = 0 WHERE id = %s" % (userId)
+				sql2 = """INSERT INTO UzivatelskeKonto 
+	(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
+	(null, %s, 3, 0, "%s", "[Automat] Deaktivace primarniho uctu", 1)""" % (userId, datetimeTed)
+				syslog.syslog("Deaktivace [nespravne clenstvi] userId:[%s] typClenstvi:[%s] stavAktivni:[%s] stavDeaktivace:[%s] maUserCC:[%s] stavKonta:[%s]" % ( userId, typClenstvi, stavAktivni, stavDeaktivace, maUserCC, stavKonta))
 
-		# Kdyz neni radny clen ale je aktivni, tak ho deaktivujeme, ten nema do netu co delat.
-		if (( typClenstvi <= 2 ) and ( stavAktivni == 1)):
-			sql = "UPDATE Uzivatel SET money_aktivni = 0"
-			sql2 = """INSERT INTO UzivatelskeKonto 
-(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
-(null, %s, 3, 0, %s, "[Automat] Deaktivace primarniho uctu", 1""" % (userId, datetimeTed)
+		# Je to radny clen
+		if ( typClenstvi >= 3 ):
+			# neni deaktivovan, stav aktivni nas nezajima, protoze tady aktivujeme vzdy (vyjma Cestnych Clenu)
+			if (stavDeaktivace == 0):
+				# Nema cestne clenstvi
+				if not (maUserCC):
+					if ( stavKonta >= vysePrispevku):
+						# Odecti prispevek
+						sql = "UPDATE Uzivatel SET money_aktivni = 1 WHERE id = %s" % (userId)
+						sql2 = """INSERT INTO UzivatelskeKonto 
+	(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
+	(null, %s, 4, -%i, "%s", "[Automat] Clensky prispevek", 1)""" % (userId, vysePrispevku, datetimeTed)
+						syslog.syslog("Odecitam prispevek userId:[%s] typClenstvi:[%s] stavAktivni:[%s] stavDeaktivace:[%s] maUserCC:[%s] stavKonta:[%s]" % ( userId, typClenstvi, stavAktivni, stavDeaktivace, maUserCC, stavKonta))
 
-		# Je to radny clen, neni deaktivovan, stav aktivni nas nezajima, protoze tady aktivujeme vzdy
-		if (( typClenstvi >= 3 ) and ( stavDeaktivace == 0)):
-			if not (maUserCC):
-				if ( stavKonta >= vysePrispevku):
-					# odecti prispevek
-					sql = "UPDATE Uzivatel SET money_aktivni = 1"
-					sql2 = """INSERT INTO UzivatelskeKonto 
-(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
-(null, %s, 4, -290, %s, "[Automat] Clensky prispevek", 1""" % (userId, datetimeTed)
+					else:
+						if (stavAktivni == 0):
+							# Neaktivni co nema penize = nevsimam si ho
+							continue
+						else:
+							# Nema dost penez, deaktivuj ho
+							sql = "UPDATE Uzivatel SET money_aktivni = 0 WHERE id = %s" % (userId)
+							sql2 = """INSERT INTO UzivatelskeKonto 
+		(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
+		(null, %s, 3, 0, "%s", "[Automat] Deaktivace uctu", 1)""" % (userId, datetimeTed)
+							syslog.syslog("Deaktivace [malo penez] userId:[%s] typClenstvi:[%s] stavAktivni:[%s] stavDeaktivace:[%s] maUserCC:[%s] stavKonta:[%s]" % ( userId, typClenstvi, stavAktivni, stavDeaktivace, maUserCC, stavKonta))
 
+				# Ma cestne clenstvi
 				else:
-					# Nema dost penez, deaktivuj ho
-					sql = "UPDATE Uzivatel SET money_aktivni = 0"
+					if (stavAktivni == 1):
+						textSql2 = "[Automat] Prodlouzeni CC"
+					else:
+						textSql2 = "[Automat] Aktivuji CC"
+					sql = "UPDATE Uzivatel SET money_aktivni = 1 WHERE id = %s" % (userId)
 					sql2 = """INSERT INTO UzivatelskeKonto 
-(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
-(null, %s, 3, 0, %s, "[Automat] Deaktivace uctu", 1""" % (userId, datetimeTed)
+	(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
+	(null, %s, 4, 0, "%s", "%s", 1)""" % (userId, datetimeTed, textSql2)
+					syslog.syslog("CC, [%s] userId:[%s] typClenstvi:[%s] stavAktivni:[%s] stavDeaktivace:[%s] maUserCC:[%s] stavKonta:[%s]" % ( textSql2, userId, typClenstvi, stavAktivni, stavDeaktivace, maUserCC, stavKonta))
 
-			# Ma cestne clenstvi
+			# Je to radny clen a je nastaven na deaktivaci
 			else:
-				sql = "UPDATE Uzivatel SET money_aktivni = 1"
-				sql2 = """INSERT INTO UzivatelskeKonto 
-(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
-(null, %s, 4, 0, %s, "[Automat] Prodlouzeni CC", 1""" % (userId, datetimeTed)
+				if ( stavAktivni == 1):
+					# Jestli je aktivni, tak neodecitej prispevek, deaktivuj ho
+					sql = "UPDATE Uzivatel SET money_aktivni = 0 WHERE id = %s" % (userId)
+					sql2 = """INSERT INTO UzivatelskeKonto 
+		(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
+		(null, %s, 2, 0, "%s", "[Automat] Deaktivace uctu", 1)""" % (userId, datetimeTed)
+					syslog.syslog("Deaktivace [urcen k deaktivaci] userId:[%s] typClenstvi:[%s] stavAktivni:[%s] stavDeaktivace:[%s] maUserCC:[%s] stavKonta:[%s]" % ( userId, typClenstvi, stavAktivni, stavDeaktivace, maUserCC, stavKonta))
+				else:
+					# Je to radny clen, je neaktivni, je nastaven na deaktivaci, tak nas uz nezajima
+					continue
 
-		# Je to radny clen, je aktivni, je nastaven na deaktivaci
-		if (( typClenstvi >= 3 ) and ( stavAktivni == 1) and ( stavDeaktivace == 1)):
-			# neodecitej prispevek, deaktivuj
-			sql = "UPDATE Uzivatel SET money_aktivni = 0"
-			sql2 = """INSERT INTO UzivatelskeKonto 
-(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
-(null, %s, 2, 0, %s, "[Automat] Deaktivace uctu", 1""" % (userId, datetimeTed)
+		if (len(sql) == 0):
+			# Zde pro jistotu, kdyby nam neco uteklo...
+			print "User s ID:[%s] typClenstvi:[%s] stavAktivni:[%s] stavDeaktivace:[%s] maUserCC:[%s] stavKonta:[%s] nebyl zprocesovan" % ( userId, typClenstvi, stavAktivni, stavDeaktivace, maUserCC, stavKonta)
+			continue
 
-		# Je to radny clen, je neaktivni, je nastaven na deaktivaci, tak nas uz nezajima
-		if (( typClenstvi >= 3 ) and ( stavAktivni == 0) and ( stavDeaktivace == 1)):
-			pass
+		spustSql(con, sql, testOpt, verboseOpt)
+		spustSql(con, sql2, testOpt, verboseOpt)
 
-		try:
-			if spustitVerbose: print sql
-			if not spustitTest:
-				cur.execute(sql)
-				con.commit()
-		except mdb.Error, e:
-			try:
-				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
-			except IndexError:
-				print "MySQL Error: %s" % str(e)
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+def OdecitatPlatbyAutomaticky(con, vysePrispevku, testOpt, verboseOpt, datetimeTed):
+	if testOpt: print "spoustim OdecitatPlatbyAutomaticky. Test rezim"
 
-		try:
-			if spustitVerbose: print sql2
-			if not spustitTest:
-				cur.execute(sql2)
-				con.commit()
-		except mdb.Error, e:
-			try:
-				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
-			except IndexError:
-				print "MySQL Error: %s" % str(e)
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+	denDnes = int(datetimeTed[8:10])
 
-
-def OdecitatPlatbyAutomaticky(con, vysePrispevku, spustitTest, spustitVerbose, datetimeTed):
-
-
-	if spustitTest: print "spoustim OdecitatPlatbyAutomaticky. Test rezim"
-	
-	# kurzor na databazi
-	cur = con.cursor()
+	# V databazi je format date, mysql nam pise warningy, coz nechcem, takze pokud se zmeni format, smazat tuto radku
+	datetimeTed = datetimeTed[0:10]
 
 	sql = "SELECT id FROM cc"
 	cc = dict()
-	cur.execute(sql)
-	rows = cur.fetchall()
+	rows, numRows = spustSql(con, sql, False, verboseOpt)
 	for row in rows:
 		userId = row[0]
 		cc[userId] = 1
 		# nyni mame v dict cc seznam vsech co maji mit net zdarma
 
-	sql = """SELECT Uzivatel_id, SUM( castka ), money_deaktivace, money_aktivni, TypClenstvi_id
-FROM UzivatelskeKonto
-JOIN Uzivatel ON Uzivatel.id = UzivatelskeKonto.Uzivatel_id
-GROUP BY Uzivatel_id
-ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
+	sql = """SELECT Uzivatel_id AS userId, SUM( castka ) AS stavKonta, money_automaticka_aktivace_do AS aktivovatDo
+FROM UzivatelskeKonto AS UK
+JOIN Uzivatel AS U ON U.id = UK.Uzivatel_id
+WHERE U.id >1 AND U.TypClenstvi_id >= 3 AND U.money_aktivni = 0 AND U.money_deaktivace = 0
+GROUP BY userId
+ORDER BY UK.Uzivatel_id ASC"""
 
-	cur.execute(sql)
-	rows = cur.fetchall()
+	rows, numRows = spustSql(con, sql, False, verboseOpt)
 	for row in rows:
-		userId = row[0]
+		sql = ""
+		sql2 = ""
+		userId = int(row[0])
 		stavKonta = int(row[1])
-		stavDeaktivace = row[2]
-		stavAktivni = row[3]
-		typClenstvi = row[4]
+		aktivovatDo = int(row[2])
 
 		# Ma uzivatel CC ?
 		if cc.has_key(userId):
@@ -249,51 +258,37 @@ ORDER BY `UzivatelskeKonto`.`Uzivatel_id` ASC"""
 		else:
 			maUserCC = False
 
-		# Je to radny clen, neni deaktivovan, neni aktivni
-		if (( typClenstvi >= 3 ) and ( stavAktivni == 0 ) and (stavDeaktivace == 0)):
-			# Nema cestne clenstvi
-			if not (maUserCC):
-				# Ma dost penez
-				if ( stavKonta >= vysePrispevku):
-					if spustitTest: print "UID:[%s] Splnuje podminky na aktivaci, ma [%s] penez." % (userId, stavKonta)
+		# Nema cestne clenstvi
+		if not (maUserCC):
+			# Ma dost penez
+			if ( stavKonta >= vysePrispevku):
+				if testOpt: print "UID:[%s] Splnuje podminky na aktivaci, ma [%s] penez." % (userId, stavKonta)
+
+				if (denDnes <= aktivovatDo):
 					# odecti prispevek
-					sql = "UPDATE Uzivatel SET money_aktivni = 1"
+					sql = "UPDATE Uzivatel SET money_aktivni = 1 WHERE id = %s" % (userId)
 					sql2 = """INSERT INTO UzivatelskeKonto 
 (PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
-(null, %s, 4, -290, %s, "[Automat] Clensky prispevek", 1""" % (userId, datetimeTed)
+(null, %s, 4, -%i, "%s", "[Automat] Clensky prispevek", 1)""" % (userId, vysePrispevku, datetimeTed)
+					syslog.syslog("Odecitam prispevek userId:[%s] predchozi stavKonta:[%s], nema CC" % ( userId, stavKonta))
 
-			# Ma cestne clenstvi
-			else:
-				sql = "UPDATE Uzivatel SET money_aktivni = 1"
-				sql2 = """INSERT INTO UzivatelskeKonto 
-(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
-(null, %s, 4, 0, %s, "[Automat] Prodlouzeni CC", 1""" % (userId, datetimeTed)
+		# Tento blok je jen priprava, v pripade ze budem strojove aktivovat usery s CC -> jejich clenstvi, tak prave timto blokem
+		#  zatim tedy nepouzito
+		# Ma cestne clenstvi
+#		else:
+#			textSql2 = "[Automat] Aktivuji CC"
+#			sql = "UPDATE Uzivatel SET money_aktivni = 1 WHERE id = %s" % (userId)
+#			sql2 = """INSERT INTO UzivatelskeKonto 
+#(PrichoziPlatba_id, Uzivatel_id, TypPohybuNaUctu_id, castka, datum, poznamka, zmenu_provedl) VALUES 
+#(null, %s, 4, 0, "%s", "%s", 1)""" % (userId, datetimeTed, textSql2)
+#			syslog.syslog("CC, [%s] userId:[%s]" % ( textSql2, userId ))
 
-		try:
-			if spustitVerbose: print sql
-			if not spustitTest:
-				cur.execute(sql)
-				con.commit()
-		except mdb.Error, e:
-			try:
-				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
-			except IndexError:
-				print "MySQL Error: %s" % str(e)
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+		if (len(sql) == 0):
+			# Nic ke spusteni, jdem na dalsiho usera
+			continue
 
-		try:
-			if spustitVerbose: print sql2
-			if not spustitTest:
-				cur.execute(sql2)
-				con.commit()
-		except mdb.Error, e:
-			try:
-				print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
-			except IndexError:
-				print "MySQL Error: %s" % str(e)
-				continue			# Nechceme oznacit prichozi platbu jako zpracovanou, kdyz sql selhalo
+		spustSql(con, sql, testOpt, verboseOpt)
+		spustSql(con, sql2, testOpt, verboseOpt)
 
 if __name__ == "__main__":
 	main(sys.argv[1:])
