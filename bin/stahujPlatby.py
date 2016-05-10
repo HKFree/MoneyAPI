@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 #
 # Author: Kendy 11/2015
-# Verze: 1.0
+# Verze: 1.1
 #
 # -f stahnuti aktualni platby z FIO API bankovnictvi, zparsovat ji a upload do databaze
 # -s stazene csv z csas rozparsuje a uploadne do databaze
+# 1.0 - 02/2016 initial
+# 1.1 - 06/2016 stavy uctu
 
 import ConfigParser, os, sys, re
 from xml.dom import minidom
@@ -19,11 +21,15 @@ from urllib2 import Request, urlopen, URLError, HTTPError
 import urllib
 import urllib2
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 
 # Aktualni pracovni adresar scriptu, s nim si automaticky nactem konfigurak
 workdir = os.path.dirname(os.path.realpath(__file__))
 config_file = workdir + '/../etc/money.ini'
+
+# spolecne funkce pro money
+sys.path.insert(0, workdir + '/../lib')
+from moneyLib import *
 
 # Nacist ini
 if os.path.exists(config_file):
@@ -229,6 +235,8 @@ def UploadVypisCsasDoDb(con, csas_dirvypisynove, csas_dirvypisyzpracovane, spust
 			sr=csv.reader(csvfile, delimiter=';')
 			# chceme zpracovat jen data, hlavicka nas nezajima
 			csvData = 0
+			# az nacerpam stav uctu z csv, tak uz ho "hledat" dale nebudu
+			mamStavUctu = 0
 			for row in sr:
 				# uz prisly na radu data ?
 				if (csvData == 1):
@@ -310,15 +318,43 @@ ON DUPLICATE KEY UPDATE datum = '%s'""" % (VS, SS, Datum, CisloUctu, NazevUctu, 
 							print "MySQL Error: %s" % str(e)
 
 				# uz jsme dosli k hlavicce v CSV souboru? Tak nastav ze v pristim cyklu jsou data
+				# 21 = pocet polozek v danem poli, hlavicka jich ma 21
 				if ( (len(row) == 21) and (csvData == 0)):
 					csvData = 1
+
+				# stav uctu
+				if ( (csvData == 0) and ((mamStavUctu > -1) or (mamStavUctu < 3)) and (mamStavUctu != 4)):
+					if (row[0] == "Statement date"):
+						datumVypisu = str(row[1])
+						# datumVypisu ma format datumu YYYY/MM/DD, chceme YYYY-MM-DD
+						datumVypisu = re.sub("/", "-", datumVypisu)
+						mamStavUctu = mamStavUctu + 1
+
+					if (row[0] == "Final balance"):
+						stavUctu = str(row[1])
+						# stavUctu ma misto desetinne tecky carku, a obsahuje mezeru
+						stavUctu = re.sub(" ", "", stavUctu)
+						stavUctu = re.sub(",", ".", stavUctu)
+						stavUctu = float(stavUctu)
+						mamStavUctu = mamStavUctu + 1
+
+					if (row[0] == "Account number"):
+						cisloUctu = str(row[1])
+						mamStavUctu = mamStavUctu + 1
+
+				if (mamStavUctu == 3):
+					# pokud neni test, tak jedem dal
+					# koukni zda pro dnesni den tam je uz stav uctu, neni tak insert, je tak update
+					mamStavUctu = 4
+					aktualizujStavUctu (con, cisloUctu, datumVypisu, stavUctu, spustitTest, spustitVerbose)
+
 			if (csvData == 0):
 				print "Nevalidni CSV soubor, ocekavano 21 poli pro radky s vypisy"
 				sys.exit(1)
-
-		# Nazev ciloveho souboru. Metoda shutil.move neni jako mv v linuxu, kde se dava cilovy adresar, zde je treba specifikovat presnou cestu vcetne nazvu ciloveho souboru
-		kam_presunout = workdir + "/" + csas_dirvypisyzpracovane + "/" + file
-		shutil.move (f, kam_presunout)
+		if spustitTest == False:
+			# Nazev ciloveho souboru. Metoda shutil.move neni jako mv v linuxu, kde se dava cilovy adresar, zde je treba specifikovat presnou cestu vcetne nazvu ciloveho souboru
+			kam_presunout = workdir + "/" + csas_dirvypisyzpracovane + "/" + file
+			shutil.move (f, kam_presunout)
 # ZPRACOVAT VYPISY CSAS KONEC
 
 # Stahnout Vypis FIO za urcity casovy usek (rozliseni je v radech dnu). Nasledne uploadnout do databaze
@@ -352,14 +388,22 @@ def StahniVypisFio(con, datumOd, datumDo, fio_url, fio_token, fio_cislo_uctu, sp
 	xmldataHTTP = response.read()
 
 	# rozparsujeme vysledne XML
-#	xml = minidom.parse('transakce.xml')
+#	xml = minidom.parse('transactions.xml')
 	xml = minidom.parseString(xmldataHTTP)
 
 	# Vytahnem z vypisu cislo uctu
 	info = xml.getElementsByTagName("Info")
 	for i in info:
-		# TODO chceme zpracovavat vypis s nasim cislem uctu, takze dodelat kontrolu
+		# cislo uctu pro kontrolu, pac chceme stahovat jen nase fio
 		cislo_uctu = i.getElementsByTagName('accountId')[0].childNodes[0].data
+		cislo_uctu_suffix = i.getElementsByTagName('bankId')[0].childNodes[0].data
+		stavUctu = i.getElementsByTagName('closingBalance')[0].childNodes[0].data
+		datumVypisu = i.getElementsByTagName('dateEnd')[0].childNodes[0].data
+		# datum vypisu je ve formatu 2016-01-01+02:00. Chceme jen ten datum bez casove zony -> prvnich 10 znaku
+		datumVypisu = datumVypisu[:10]
+		cisloUctu = str(cislo_uctu) + "/" + str(cislo_uctu_suffix)
+		aktualizujStavUctu (con, cisloUctu, datumVypisu, stavUctu, spustitTest, spustitVerbose)
+
 		if not (cislo_uctu == fio_cislo_uctu):
 			print "Nesouhlasi cislo uctu, nepokracuji v cinnosti."
 			sys.exit(1)
@@ -498,6 +542,21 @@ ON DUPLICATE KEY UPDATE datum = '%s'""" % (VS, SS, Datum, CisloUctu, NazevUctu, 
 			except IndexError:
 				print "MySQL Error: %s" % str(e)
 # ZPRACOVAT VYPISY FIO KONEC
+
+def aktualizujStavUctu (con, cisloUctu, datumVypisu, stavUctu, spustitTest, spustitVerbose):
+	# Nejdrive se dotazeme na to, zda uz za ten den je stav uctu nahran, pokud ano, tak provedeme UPDATE, pokud ne tak INSERT
+	sql = "SELECT COUNT(*) FROM StavBankovnihoUctu WHERE datum LIKE '%s%%' AND BankovniUcet_id = (SELECT id FROM BankovniUcet WHERE text = '%s')" % (str(datumVypisu), str(cisloUctu))
+
+	rows, numRows = spustSql(con, sql, False, spustitVerbose)
+	# zda je ci neni zaznam je nyni v res[][]
+	res = rows[0][0]
+
+	if (int(res) == 0):
+		sql = "INSERT INTO StavBankovnihoUctu (BankovniUcet_id, datum, castka) VALUES ((SELECT id FROM BankovniUcet WHERE text = '%s'), '%s', '%f')" % (str(cisloUctu), str(datumVypisu), float(stavUctu))
+	else:
+		sql = "UPDATE StavBankovnihoUctu SET castka = %f WHERE BankovniUcet_id = (SELECT id FROM BankovniUcet WHERE text = '%s') AND datum LIKE '%s%%'" % (float(stavUctu), str(cisloUctu), str(datumVypisu))
+
+	rows, numRows = spustSql(con, sql, spustitTest, spustitVerbose)
 
 if __name__ == "__main__":
 	main(sys.argv[1:])
