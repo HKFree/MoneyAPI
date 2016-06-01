@@ -57,17 +57,16 @@ def main(argv):
 	cur.execute(sql)
 	con.commit()
 
-
 	nazevScriptu = sys.argv[0]
 
 	# Nacist argumenty
 	PROG = os.path.basename(os.path.splitext(__file__)[0])
-	description = "Synchronizator databaze -> LDAP. Volba -m pouze najde v LDAPu uzivatele co jsou navic a ty co tam chybi. Volba -p syncuje uplne vsechny atributy + to co dela -m."
+	description = "Synchronizator databaze -> LDAP. Volba -p syncuje uplne vsechny atributy. Nutno spoustet spolu s -u."
 	parser = OptionParser(
 		usage='usage: %prog [OPTIONS]',
 		version='%s %s' % (PROG, VERSION),
 		description=description)
-	parser.add_option('-u', '--useri',
+	parser.add_option('-u', '--useri',			# hotovo
 		action='store_true',
 		dest='useriOpt',
 		default=False,
@@ -76,13 +75,8 @@ def main(argv):
 		action='store_true',
 		dest='plnaOpt',
 		default=False,
-		help='Synchronizace uzivatelu plna TBD')
-	parser.add_option('-m', '--min',
-		action='store_true',
-		dest='minimalistickaOpt',
-		default=False,
-		help='Synchronizace uzivatelu minimalisticka (vymaz, pridani) TBD')
-	parser.add_option('-r', '--role',
+		help='Synchronizace uzivatelu plna')
+	parser.add_option('-r', '--role',			# hotovo
 		action='store_true',
 		dest='roleOpt',
 		default=False,
@@ -113,14 +107,16 @@ def main(argv):
 	except Exception, error:
 		print error
 
+	if (options.plnaOpt and not options.useriOpt):
+		print "Pro plnou synchronizaci spust s volbou -u"
+
 	if (options.useriOpt):
-		syncLDAPuseri (con, options.testOpt, options.verboseOpt, ldapCon, ldap_baseDn)
+		syncLDAPuseri (con, options.testOpt, options.verboseOpt, ldapCon, ldap_baseDn, options.plnaOpt)
 
 	if (options.roleOpt):
 		syncLDAProle (con, options.testOpt, options.verboseOpt, ldapCon, ldap_baseDn)
 
-
-def syncLDAPuseri (con, testOpt, verboseOpt, ldapcon, ldap_baseDn):
+def syncLDAPuseri (con, testOpt, verboseOpt, ldapcon, ldap_baseDn, plnaOpt):
 	sql = "SELECT id, nick, email, jmeno, prijmeni, heslo FROM Uzivatel WHERE TypClenstvi_id >1 ORDER BY Uzivatel.id ASC"
 	rows, numRows = spustSql(con, sql, testOpt, verboseOpt)
 
@@ -216,6 +212,20 @@ def syncLDAPuseri (con, testOpt, verboseOpt, ldapcon, ldap_baseDn):
 			except ldap.SERVER_DOWN:
 				print "Error: asi spadl LDAP server"
 				sys.exit(1)
+
+	# synchronizovat atributy, nyni zatim jen hesla
+	if (plnaOpt):
+		for dbUID in useriDb.keys():
+			if not ((dbUID == 1) or (dbUID == 555)):	# UID 1 je specialni user, do LDAPu nema pristupy
+				dn = "uid=%s,ou=People,dc=hkfree,dc=org" % (dbUID)
+				user = useriDb[dbUID]
+				nove_heslo = [(ldap.MOD_REPLACE, 'userPassword', user['heslo'].encode("utf-8"))]
+
+				try:
+					result = ldapcon.modify_s(dn, nove_heslo)
+				except ldap.SERVER_DOWN:
+					print "Error: asi spadl LDAP server"
+					sys.exit(1)
 
 
 def syncLDAProle (con, testOpt, verboseOpt, ldapcon, ldap_baseDn):
